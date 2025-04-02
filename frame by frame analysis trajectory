@@ -1,0 +1,121 @@
+#use this code in Jupyter Notebooks
+#Made especially to use less memory and evaluate large trajectory files
+#Given a LAMMPS trajectory with AMBER forcefields, this script made with assistance of DEEPSEEK 
+#evaluate the interactions between a protein and a DNA fragment 
+#-------------------------------------------------------------------------------
+#tested with python 3.12.4
+
+import numpy as np
+from collections import defaultdict
+import os
+
+def load_lammpstrj_structure(lammpstrj_file):
+    """Load LAMMPS trajectory file line-by-line to handle large files."""
+    with open(lammpstrj_file, 'r') as f:
+        while True:
+            line = f.readline()
+            if not line:  # End of file
+                break
+
+            if "ITEM: TIMESTEP" in line:
+                # Read timestep
+                snapshot = {'timestep': int(f.readline().strip())}
+            elif "ITEM: NUMBER OF ATOMS" in line:
+                # Read number of atoms
+                snapshot['num_atoms'] = int(f.readline().strip())
+            elif "ITEM: BOX BOUNDS" in line:
+                # Read box bounds
+                box_bounds = []
+                for _ in range(3):
+                    box_bounds.append([float(x) for x in f.readline().strip().split()])
+                snapshot['box_bounds'] = box_bounds
+            elif "ITEM: ATOMS" in line:
+                # Read atom data
+                atom_data = []
+                num_atoms = snapshot['num_atoms']
+                for _ in range(num_atoms):
+                    atom_info = f.readline().strip().split()
+                    atom_id = int(atom_info[0])
+                    atom_type = int(atom_info[1])
+                    x = float(atom_info[2])
+                    y = float(atom_info[3])
+                    z = float(atom_info[4])
+                    atom_data.append({'id': atom_id, 'type': atom_type, 'coords': np.array([x, y, z])})
+                snapshot['atoms'] = atom_data
+                yield snapshot  # Yield snapshot instead of storing all in memory
+
+def get_atoms_by_id_range(atoms, id_range):
+    """Filter atoms by ID range."""
+    start_id, end_id = id_range
+    return [atom for atom in atoms if start_id <= atom['id'] <= end_id and atom['type'] not in {45, 46}]
+
+def calculate_distance(atom1, atom2):
+    return np.linalg.norm(atom1['coords'] - atom2['coords'])
+
+def find_close_atoms(dna_atoms, protein_atoms, distance_threshold=3.0):
+#FEEL FREE TO MODIFY THIS TO CHANGE THE THRESHOLD
+    """Find atoms within the specified distance threshold (3 Å or less)."""
+    close_atoms = []
+    for dna_atom in dna_atoms:
+        for protein_atom in protein_atoms:
+            distance = calculate_distance(dna_atom, protein_atom)
+            if distance <= distance_threshold:
+                close_atoms.append((dna_atom, protein_atom, distance))
+    return close_atoms
+
+def load_atom_mapping(mapping_file):
+    """Load atom mapping from a file (e.g., BGF file)."""
+    atom_mapping = {}
+    with open(mapping_file, 'r') as f:
+        for line in f:
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                parts = line.split()
+                atom_id = int(parts[1])
+                atom_name = parts[2]
+                residue_name = parts[3]
+                chain_id = parts[4]
+                atom_mapping[atom_id] = (atom_name, residue_name, chain_id)
+    return atom_mapping
+
+def process_lammpstrj_file(lammpstrj_file, interaction_counter, atom_mapping):
+    """Process LAMMPS trajectory file in a memory-efficient way."""
+    for snapshot in load_lammpstrj_structure(lammpstrj_file):
+        atoms = snapshot['atoms']
+        protein_atoms = get_atoms_by_id_range(atoms, (1, 8462))  # Protein atoms
+        dna_atoms = get_atoms_by_id_range(atoms, (8463, 9100))   # DNA atoms
+        
+        close_atoms = find_close_atoms(dna_atoms, protein_atoms)
+        
+        for dna_atom, protein_atom, distance in close_atoms:
+            # Get descriptive names from the mapping
+            dna_desc = atom_mapping.get(dna_atom['id'], (f"DNA Atom ID: {dna_atom['id']}", "UNK", "X"))
+            protein_desc = atom_mapping.get(protein_atom['id'], (f"Protein Atom ID: {protein_atom['id']}", "UNK", "X"))
+            
+            # Format DNA and protein descriptions
+            dna_interaction = f"(DNA Atom ID: {dna_atom['id']} {dna_desc[0]} {dna_desc[1]} {dna_desc[2]})"
+            protein_interaction = f"(Protein Atom ID: {protein_atom['id']} {protein_desc[0]} {protein_desc[1]} {protein_desc[2]})"
+            
+            # Print the interaction data (only for distances ≤ 5 Å)
+            print(f"{dna_interaction} is interacting with {protein_interaction} | Distance: {distance:.2f} Å")
+
+def analyze_lammpstrj_file(file_path, mapping_file):
+    """Analyze a single LAMMPS trajectory file."""
+    interaction_counter = defaultdict(int)
+    
+    if not os.path.isfile(file_path):
+        print("Invalid file path. Please enter a valid file.")
+        return
+    
+    # Load atom mapping
+    atom_mapping = load_atom_mapping(mapping_file)
+    
+    print(f"Processing file: {file_path}")
+    process_lammpstrj_file(file_path, interaction_counter, atom_mapping)
+
+if __name__ == "__main__":
+    file_path = "I:\\...\\...\\...\\cpmv8-a-dna1.solvent.Na.7.298K.prod.lammpstrj"  
+#THIS IS THE PART TO BE MODIFIED WITH THE LOCATION OF THE FILE
+    mapping_file = "I:\\...\\...\\...\\cpmv8-a-dna1.solvent.Na.7.bgf"  # Replace with the path to your BGF file
+#THIS IS THE PART TO BE MODIFIED WITH THE LOCATION OF THE FILE
+analyze_lammpstrj_file(file_path, mapping_file)
+
