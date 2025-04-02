@@ -1,0 +1,125 @@
+#ONCE THE DATA PER FRAME HAS BEEN PRINTED, YOUC AN SAVE IT AS A TXT FILE AND THEN ANALYZE IT
+#THIS CODE IS TO PROCESS AND GROUP THE DATA, SO YOU CAN SEE WITH INTERACTIONS REPEATED
+#Python 3.11.9 was used
+#new concept is introduced: percentage_of_total_interactions = (data['count'] / total_interactions) * 100
+
+-----------------------------------------------------------------------------------
+import pandas as pd
+from collections import defaultdict
+import numpy as np
+
+# Function to parse a line and extract DNA Atom ID, Protein Atom ID, and distance
+def parse_line(line):
+    if "is interacting with" in line:
+        parts = line.split('|')
+        dna_part = parts[0].split('(DNA Atom ID: ')[1].split(')')[0].strip()
+        protein_part = parts[0].split('(Protein Atom ID: ')[1].split(')')[0].strip()
+        
+        # Handle encoding issues with the Ångström symbol
+        distance_str = parts[1].split(': ')[1].strip()
+        distance_str = distance_str.replace('Ã…', 'Å')  # Fix encoding issue
+        distance = float(distance_str.split(' Å')[0].strip())
+        
+        return dna_part, protein_part, distance
+    return None
+
+# Function to split the ID into components
+def split_id(atom_id):
+    parts = atom_id.split()
+    atom_number = parts[0]  # Atom ID number
+    chemical_letters = parts[1]  # Chemical representative letters
+    residue_letters = parts[2]  # DNA/Protein representative letters
+    return atom_number, chemical_letters, residue_letters
+
+# Function to process the file in chunks
+def process_file(file_path, chunk_size=100000):
+    grouped_interactions = defaultdict(lambda: {
+        'count': 0,
+        'total_distance': 0.0,
+        'distances': [],  # Store all distances for std dev, min, and max
+        'min_distance': float('inf'),
+        'max_distance': float('-inf')
+    })
+    total_interactions = 0  # Track total number of interactions
+    
+    with open(file_path, 'r', encoding='utf-8') as file:  # Ensure proper encoding
+        chunk = []
+        for line in file:
+            parsed = parse_line(line)
+            if parsed:
+                chunk.append(parsed)
+                if len(chunk) >= chunk_size:
+                    total_interactions += process_chunk(chunk, grouped_interactions)
+                    chunk = []
+        if chunk:  # Process remaining lines in the last chunk
+            total_interactions += process_chunk(chunk, grouped_interactions)
+    
+    # Convert grouped data into a DataFrame
+    grouped_data = []
+    for (dna_id, protein_id), data in grouped_interactions.items():
+        distances = data['distances']
+        if distances:  # Ensure there are distances to calculate stats
+            avg_distance = data['total_distance'] / data['count']
+            std_dev = np.std(distances)
+            min_distance = data['min_distance']
+            max_distance = data['max_distance']
+        else:
+            avg_distance = std_dev = min_distance = max_distance = 0.0
+        
+        # Calculate percentage of total interactions
+        percentage_of_total_interactions = (data['count'] / total_interactions) * 100
+        
+        # Split DNA Atom ID
+        dna_number, dna_chemical, dna_residue = split_id(dna_id)
+        # Split Protein Atom ID
+        protein_number, protein_chemical, protein_residue = split_id(protein_id)
+        
+        grouped_data.append({
+            # DNA Atom ID Components
+            'DNA Atom Number': dna_number,
+            'DNA Chemical Letters': dna_chemical,
+            'DNA Residue Letters': dna_residue,
+            # Protein Atom ID Components
+            'Protein Atom Number': protein_number,
+            'Protein Chemical Letters': protein_chemical,
+            'Protein Residue Letters': protein_residue,
+            # Interaction Statistics
+            'Number of Interactions': data['count'],
+            'Percentage of Total Interactions': percentage_of_total_interactions,
+            'Average Distance': avg_distance,
+            'Standard Deviation': std_dev,
+            'Minimum Distance': min_distance,
+            'Maximum Distance': max_distance
+        })
+    
+    return pd.DataFrame(grouped_data)
+
+# Function to process a chunk of data
+def process_chunk(chunk, grouped_interactions):
+    chunk_count = 0
+    for dna_id, protein_id, distance in chunk:
+        key = (dna_id, protein_id)
+        grouped_interactions[key]['count'] += 1  # Increment interaction count
+        grouped_interactions[key]['total_distance'] += distance  # Add to total distance
+        grouped_interactions[key]['distances'].append(distance)  # Store distance for std dev
+        # Update min and max distances
+        if distance < grouped_interactions[key]['min_distance']:
+            grouped_interactions[key]['min_distance'] = distance
+        if distance > grouped_interactions[key]['max_distance']:
+            grouped_interactions[key]['max_distance'] = distance
+        chunk_count += 1
+    return chunk_count  # Return the number of interactions processed in this chunk
+
+# Path to your large text file
+file_path = 'I:/coding/dna-protein-interactions/replicas/cpmv-prod-files/AMBER-CPMV-DATA3.txt'
+#"I:\coding\dna-protein-interactions\replicas\cpmv-prod-files\AMBER-CPMV-DATA2-5A.txt"
+# Process the file and get the grouped data
+df = process_file(file_path)
+
+# Display the DataFrame
+print(df)
+
+# Optionally, save the DataFrame to a CSV file
+df.to_csv('I:/DATA-cpmv-a-dna-1-interactions_amber3.csv', index=False)#
+#MODIFY THE LOCATION OF THE FILE TO BE SAVED AS CSV, THIS CAN EASILY BE TRANSFORMED INTO AN EXCEL FILE
+
